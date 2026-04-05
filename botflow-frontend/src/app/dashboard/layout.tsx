@@ -3,10 +3,8 @@ import { useEffect, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { useAuthStore } from '@/store/authStore'
-import {
-  Bot, MessageSquare, BarChart2, Puzzle,
-  Settings, LogOut, Home, ChevronDown,Users
-} from 'lucide-react'
+import { Bot, MessageSquare, BarChart2, Puzzle, 
+  Settings, LogOut, Home, ChevronDown, Users } from 'lucide-react'
 
 const navItems = [
   { href: '/dashboard',       icon: Home,          label: 'Vue d\'ensemble' },
