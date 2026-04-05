@@ -1,0 +1,132 @@
+name: BotFlow CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_API: ghcr.io/${{ github.repository }}/botflow-api
+  IMAGE_WEB: ghcr.io/${{ github.repository }}/botflow-frontend
+
+jobs:
+  # ── Backend tests ──────────────────────────────────────────────────────────
+  test-backend:
+    name: Backend — Build & Test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB:       botflow_test
+          POSTGRES_USER:     postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 10s
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with: { dotnet-version: '8.0.x' }
+
+      - name: Restore dependencies
+        run: dotnet restore BotFlow.sln
+
+      - name: Build
+        run: dotnet build BotFlow.sln -c Release --no-restore
+
+      - name: Run migrations
+        run: |
+          cd BotFlow.API
+          dotnet ef database update \
+            --project ../BotFlow.Infrastructure \
+            --connection "Host=localhost;Database=botflow_test;Username=postgres;Password=postgres"
+
+      # - name: Run tests
+      #   run: dotnet test --no-build -c Release --collect:"XPlat Code Coverage"
+
+  # ── Frontend tests ─────────────────────────────────────────────────────────
+  test-frontend:
+    name: Frontend — Build & Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: botflow-frontend
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm', cache-dependency-path: 'botflow-frontend/package-lock.json' }
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run type-check
+      - run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:5000
+          NEXT_PUBLIC_WS_URL:  ws://localhost:5000
+
+  # ── Docker build & push (only on main) ────────────────────────────────────
+  build-and-push:
+    name: Build & Push Docker images
+    needs: [test-backend, test-frontend]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push API image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: BotFlow.API/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_API }}:latest,${{ env.IMAGE_API }}:${{ github.sha }}
+
+      - name: Build & push Frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: botflow-frontend
+          file: botflow-frontend/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_WEB }}:latest,${{ env.IMAGE_WEB }}:${{ github.sha }}
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ secrets.API_URL }}
+            NEXT_PUBLIC_WS_URL=${{ secrets.WS_URL }}
+
+  # ── Deploy to production ───────────────────────────────────────────────────
+  deploy:
+    name: Deploy to production
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: production
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host:     ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key:      ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            cd /opt/botflow
+            docker compose pull
+            docker compose up -d --remove-orphans
+            docker image prune -f
+            echo "✓ Deployed at $(date)"

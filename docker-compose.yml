@@ -1,0 +1,78 @@
+version: "3.9"
+
+services:
+  # ── PostgreSQL ────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: botflow_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       botflow
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis (cache + rate limiting) ────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: botflow_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ── ASP.NET Core API ──────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: BotFlow.API/Dockerfile
+    container_name: botflow_api
+    restart: unless-stopped
+    ports:
+      - "5000:80"
+      - "5001:443"
+    environment:
+      ASPNETCORE_ENVIRONMENT:    Production
+      ASPNETCORE_URLS:           http://+:80
+      ConnectionStrings__DefaultConnection: >
+        Host=postgres;Port=5432;Database=botflow;Username=postgres;Password=postgres
+      Jwt__Secret:               "REPLACE_WITH_STRONG_SECRET_IN_PRODUCTION_MIN_32_CHARS!!"
+      Jwt__Issuer:               BotFlow
+      Jwt__Audience:             BotFlow
+      Cors__AllowedOrigins__0:   http://localhost:3000
+      Cors__AllowedOrigins__1:   https://app.botflow.io
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Next.js Frontend ──────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./botflow-frontend
+      dockerfile: Dockerfile
+    container_name: botflow_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL:       http://localhost:5000
+      NEXT_PUBLIC_WS_URL:        ws://localhost:5000
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
