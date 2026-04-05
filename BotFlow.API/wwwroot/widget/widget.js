@@ -24,7 +24,7 @@
   sessionStorage.setItem('bf_session', sessionId)
 
   const i18n = {
-    fr: { placeholder: "Tapez votre message...", send: 'Envoyer', online: 'En ligne', offline: 'Hors ligne', typing: "En train d'écrire...", startChat: 'Démarrer la conversation' },
+    fr: { placeholder: "Tapez votre message...", send: 'Envoyer', online: 'En ligne', offline: 'Hors ligne', typing: "En train d'ecrire...", startChat: 'Demarrer la conversation' },
     en: { placeholder: 'Type your message...', send: 'Send', online: 'Online', offline: 'Offline', typing: 'Typing...', startChat: 'Start chat' },
     ar: { placeholder: 'اكتب رسالتك...', send: 'إرسال', online: 'متصل', offline: 'غير متصل', typing: 'جارٍ الكتابة...', startChat: 'ابدأ المحادثة' },
   }
@@ -39,6 +39,10 @@
     #bf-launcher.open svg { transform: rotate(45deg); }
     #bf-window { position: fixed; bottom: 94px; right: 24px; z-index: 9998; width: 340px; height: 520px; background: #fff; border-radius: 16px; box-shadow: 0 24px 64px rgba(0,0,0,.18); display: flex; flex-direction: column; overflow: hidden; opacity: 0; transform: translateY(16px) scale(.97); pointer-events: none; transition: opacity .22s, transform .22s; }
     #bf-window.open { opacity: 1; transform: none; pointer-events: all; }
+    @media (max-width: 480px) {
+      #bf-window { width: calc(100vw - 20px); height: calc(100vh - 100px); bottom: 80px; right: 10px; border-radius: 16px; }
+      #bf-launcher { bottom: 16px; right: 16px; }
+    }
     #bf-header { background: ${THEME}; padding: 16px 18px; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
     #bf-header-avatar { width: 38px; height: 38px; background: rgba(255,255,255,.25); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
     #bf-header-info { flex: 1; }
@@ -59,6 +63,9 @@
     .bf-dot:nth-child(2) { animation-delay: .16s; }
     .bf-dot:nth-child(3) { animation-delay: .32s; }
     @keyframes bf-typing { 0%,60%,100%{transform:none} 30%{transform:translateY(-4px)} }
+    #bf-quick-replies { display: flex; flex-wrap: wrap; gap: 7px; padding: 8px 14px 10px; background: #f8f8fb; border-top: 1px solid #eee; flex-shrink: 0; }
+    .bf-quick-btn { padding: 6px 14px; background: #fff; border: 1.5px solid ${THEME}; border-radius: 20px; color: ${THEME}; font-size: 12px; font-weight: 500; cursor: pointer; font-family: inherit; transition: all .15s; }
+    .bf-quick-btn:hover { background: ${THEME}; color: #fff; }
     #bf-input-row { padding: 10px 12px; border-top: 1px solid #eee; display: flex; gap: 8px; background: #fff; flex-shrink: 0; }
     #bf-input { flex: 1; background: #f4f4f8; border: 1px solid #e0e0ea; border-radius: 8px; padding: 8px 11px; font-size: 13px; color: #1a1a2e; outline: none; transition: border-color .15s; resize: none; font-family: inherit; }
     #bf-input:focus { border-color: ${THEME}; }
@@ -101,7 +108,7 @@
           </svg>
         </button>
       </div>
-      <div id="bf-branding">Propulsé par <a href="https://botflow.io" target="_blank">BotFlow</a></div>
+      <div id="bf-branding">Propulse par <a href="https://botflow.io" target="_blank">BotFlow</a></div>
     </div>
   `
   document.body.appendChild(root)
@@ -135,23 +142,63 @@
         }),
       })
       if (!res.ok) {
-        const err = await res.text()
-        console.error('[BotFlow] API error:', res.status, err)
+        console.error('[BotFlow] API error:', res.status)
         return
       }
       const data = await res.json()
       conversationId = data.id
       sessionStorage.setItem('bf_conv_' + BOT_ID, conversationId)
 
-      // Show welcome message if available
-      if (data.chatbot && data.chatbot.welcomeMessage) {
-        addMessage({ role: 'bot', content: data.chatbot.welcomeMessage, id: generateId(), createdAt: new Date().toISOString() })
+      const welcome = data.chatbot?.welcomeMessage
+        || data.welcomeMessage
+        || 'Bonjour ! Comment puis-je vous aider ?'
+
+      if (data.chatbot?.name) {
+        const titleEl = document.getElementById('bf-header-title')
+        if (titleEl) titleEl.textContent = data.chatbot.name
       }
+
+      addMessage({
+        role: 'bot',
+        content: welcome,
+        id: generateId(),
+        createdAt: new Date().toISOString(),
+      })
+
+      showQuickReplies([
+        'Prendre un rendez-vous',
+        'Voir les tarifs',
+        'Nous contacter',
+      ])
 
       connectWebSocket()
     } catch (err) {
       console.error('[BotFlow] Failed to create conversation:', err)
     }
+  }
+
+  function showQuickReplies(replies) {
+    const old = document.getElementById('bf-quick-replies')
+    if (old) old.remove()
+
+    const wrap = document.createElement('div')
+    wrap.id = 'bf-quick-replies'
+
+    replies.forEach(reply => {
+      const btn = document.createElement('button')
+      btn.className = 'bf-quick-btn'
+      btn.textContent = reply
+      btn.onclick = () => {
+        wrap.remove()
+        input.value = reply
+        sendMessage()
+      }
+      wrap.appendChild(btn)
+    })
+
+    const inputRow = document.getElementById('bf-input-row')
+    inputRow.parentNode.insertBefore(wrap, inputRow)
+    msgList.scrollTop = msgList.scrollHeight
   }
 
   async function connectWebSocket() {
@@ -169,6 +216,7 @@
       .build()
 
     connection.on('MessageReceived', (msg) => {
+      setTypingIndicator(false)
       if (msg.role !== 'user') addMessage(msg)
     })
 
@@ -183,7 +231,7 @@
     connection.on('ConversationEscalated', () => {
       addMessage({
         role: 'bot',
-        content: 'Votre demande a été transmise à un agent humain. Veuillez patienter.',
+        content: 'Votre demande a ete transmise a un agent humain. Veuillez patienter.',
         id: generateId(),
         createdAt: new Date().toISOString()
       })
@@ -224,28 +272,34 @@
     input.value = ''
     autoResizeTextarea()
 
+    const qr = document.getElementById('bf-quick-replies')
+    if (qr) qr.remove()
+
     addMessage({ role: 'user', content, id: generateId(), createdAt: new Date().toISOString() })
+
+    setTypingIndicator(true)
 
     try {
       if (connection && connection.state === 'Connected') {
         await connection.invoke('SendMessage', conversationId, TENANT_ID, BOT_ID, content)
       } else {
-        // Fallback REST si WebSocket non connecté
         const res = await fetch(`${API_URL}/api/conversations/${conversationId}/messages`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ tenantId: TENANT_ID, content }),
         })
+        setTypingIndicator(false)
         if (res.ok) {
           const msg = await res.json()
           if (msg && msg.role !== 'user') addMessage(msg)
         }
       }
     } catch (err) {
+      setTypingIndicator(false)
       console.error('[BotFlow] Failed to send message:', err)
       addMessage({
         role: 'bot',
-        content: "Désolé, une erreur s'est produite. Veuillez réessayer.",
+        content: "Desole, une erreur s'est produite. Veuillez reessayer.",
         id: generateId(),
         createdAt: new Date().toISOString()
       })
@@ -264,9 +318,9 @@
     const isAgent = msg.role === 'agent'
 
     const wrap = document.createElement('div')
-    wrap.style.display        = 'flex'
-    wrap.style.flexDirection  = 'column'
-    wrap.style.alignItems     = isUser ? 'flex-end' : 'flex-start'
+    wrap.style.display       = 'flex'
+    wrap.style.flexDirection = 'column'
+    wrap.style.alignItems    = isUser ? 'flex-end' : 'flex-start'
 
     let inner = ''
     if (msg.isAiGenerated) {
@@ -318,10 +372,10 @@
 
   function loadScript(src) {
     return new Promise((resolve, reject) => {
-      const s    = document.createElement('script')
-      s.src      = src
-      s.onload   = resolve
-      s.onerror  = reject
+      const s   = document.createElement('script')
+      s.src     = src
+      s.onload  = resolve
+      s.onerror = reject
       document.head.appendChild(s)
     })
   }

@@ -5,6 +5,7 @@ import ReactFlow, {
   addEdge, useNodesState, useEdgesState,
   Background, Controls, MiniMap,
   Connection, Edge, Node, NodeTypes,
+  Handle, Position,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
 import { chatbotApi } from '@/lib/api'
@@ -40,6 +41,10 @@ function BotFlowNode({ data, selected }: { data: { type: string; label: string; 
       boxShadow: selected ? `0 0 0 2px ${color}30` : 'none',
       transition: 'border-color .15s',
     }}>
+      {/* ← Ajoutez ces deux lignes */}
+      <Handle type="target" position={Position.Top}
+        style={{ background: color, width: 10, height: 10, border: '2px solid #111118' }} />
+
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
         <div style={{
           width: 24, height: 24, borderRadius: 6,
@@ -53,6 +58,7 @@ function BotFlowNode({ data, selected }: { data: { type: string; label: string; 
           {data.label}
         </span>
       </div>
+
       {data.content && (
         <div style={{
           fontSize: 12, color: '#9090A8', lineHeight: 1.45,
@@ -62,6 +68,10 @@ function BotFlowNode({ data, selected }: { data: { type: string; label: string; 
           {data.content}
         </div>
       )}
+
+      {/* ← Ajoutez cette ligne */}
+      <Handle type="source" position={Position.Bottom}
+        style={{ background: color, width: 10, height: 10, border: '2px solid #111118' }} />
     </div>
   )
 }
@@ -127,8 +137,12 @@ export default function FlowEditorPage() {
   }, [id])
 
   const onConnect = useCallback((connection: Connection) => {
-    setEdges(eds => addEdge({ ...connection, style: { stroke: '#6C63FF', strokeWidth: 1.5 } }, eds))
-  }, [setEdges])
+  setEdges(eds => addEdge({
+    ...connection,
+    style: { stroke: '#6C63FF', strokeWidth: 1.5 },
+    type: 'default',
+  }, eds))
+}, [setEdges])
 
   // Add a new node from the palette
   const addNode = (type: string) => {
@@ -138,33 +152,46 @@ export default function FlowEditorPage() {
 
   // Save flow to API
   const saveFlow = async () => {
-    if (!id) return
-    setSaving(true)
-    try {
-      const payload = {
-  nodes: nodes.map(n => ({
-    id:          n.id,
-    type:        (n.data as { type: string }).type,
-    label:       (n.data as { label: string }).label,
-    contentJson: JSON.stringify({ text: (n.data as { content?: string }).content ?? '' }),
-    posX:        n.position.x,
-    posY:        n.position.y,
-  })),
-  edges: edges.map(e => ({
-    id:            e.id,
-    sourceNodeId:  e.source,
-    targetNodeId:  e.target,
-    conditionLabel: e.label as string | undefined,
-  })),
-}
-      await chatbotApi.saveFlow(id, payload)
-      setSaved(true)
-      setTimeout(() => setSaved(false), 2000)
-    } finally {
-      setSaving(false)
-    }
-  }
+  if (!id) return
+  setSaving(true)
+  try {
+    // Créer une map id ReactFlow → GUID pour les nouveaux noeuds
+    const idMap: Record<string, string> = {}
+    nodes.forEach(n => {
+      if (n.id.includes('-') && n.id.length === 36) {
+        idMap[n.id] = n.id // déjà un GUID valide
+      } else {
+        idMap[n.id] = crypto.randomUUID() // générer un vrai GUID
+      }
+    })
 
+    const payload = {
+      nodes: nodes.map(n => ({
+        id:          idMap[n.id],
+        type:        (n.data as { type: string }).type,
+        label:       (n.data as { label: string }).label,
+        contentJson: JSON.stringify({ text: (n.data as { content?: string }).content ?? '' }),
+        posX:        Math.round(n.position.x),
+        posY:        Math.round(n.position.y),
+      })),
+      edges: edges.map(e => ({
+        id:             crypto.randomUUID(),
+        sourceNodeId:   idMap[e.source] ?? e.source,
+        targetNodeId:   idMap[e.target] ?? e.target,
+        conditionLabel: e.label as string | undefined,
+      })),
+    }
+
+    await chatbotApi.saveFlow(id, payload)
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+  } catch (err) {
+    console.error('Save flow error:', err)
+    alert('Erreur lors de la sauvegarde')
+  } finally {
+    setSaving(false)
+  }
+}
   // Deploy bot (set status to live)
   const deployBot = async () => {
     if (!id) return
@@ -235,17 +262,23 @@ export default function FlowEditorPage() {
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         {/* ReactFlow canvas */}
         <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
-          nodeTypes={nodeTypes}
-          onNodeClick={(_, node) => { setSelectedNodeId(node.id); setEditContent((node.data as { content?: string }).content ?? '') }}
-          onPaneClick={() => setSelectedNodeId(null)}
-          fitView
-          style={{ flex: 1 }}
-        >
+  nodes={nodes}
+  edges={edges}
+  onNodesChange={onNodesChange}
+  onEdgesChange={onEdgesChange}
+  onConnect={onConnect}
+  nodeTypes={nodeTypes}
+  onNodeClick={(_, node) => { setSelectedNodeId(node.id); setEditContent((node.data as { content?: string }).content ?? '') }}
+  onPaneClick={() => setSelectedNodeId(null)}
+  onEdgeClick={(_, edge) => {
+    if (confirm('Supprimer cette connexion ?')) {
+      setEdges(eds => eds.filter(e => e.id !== edge.id))
+    }
+  }}
+  deleteKeyCode="Delete"
+  fitView
+  style={{ flex: 1 }}
+>
           <Background color="#2A2A38" gap={24} size={1} />
           <Controls style={{ background: '#111118', border: '1px solid #2A2A38', borderRadius: 8 }} />
           <MiniMap

@@ -1,7 +1,9 @@
 using BotFlow.Application.DTOs.Conversation;
 using BotFlow.Application.Interfaces;
+using BotFlow.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 
 namespace BotFlow.API.Controllers;
@@ -13,12 +15,17 @@ public class ConversationsController : ControllerBase
 {
     private readonly IConversationService _convs;
     private readonly IFlowEngineService _flowEngine;
+    private readonly AppDbContext _db;
     private Guid TenantId => Guid.Parse(User.FindFirstValue("tenant_id")!);
 
-    public ConversationsController(IConversationService convs, IFlowEngineService flowEngine)
+    public ConversationsController(
+        IConversationService convs,
+        IFlowEngineService flowEngine,
+        AppDbContext db)
     {
-        _convs = convs;
+        _convs      = convs;
         _flowEngine = flowEngine;
+        _db         = db;
     }
 
     [HttpGet]
@@ -35,12 +42,36 @@ public class ConversationsController : ControllerBase
         return conv is null ? NotFound() : Ok(conv);
     }
 
+    // ✅ Retourne le welcomeMessage du chatbot
     [HttpPost]
     [AllowAnonymous]
-    public async Task<ActionResult<ConversationDto>> Create([FromBody] CreateConversationDto dto)
+    public async Task<ActionResult<object>> Create([FromBody] CreateConversationDto dto)
     {
-        var conv = await _convs.CreateAsync(dto.TenantId, dto.ChatbotId, dto.Channel, dto.SessionId);
-        return CreatedAtAction(nameof(GetById), new { id = conv.Id }, conv);
+        var conv = await _convs.CreateAsync(
+            dto.TenantId, dto.ChatbotId, dto.Channel, dto.SessionId);
+
+        // Récupérer le chatbot pour le message de bienvenue
+        var chatbot = await _db.Chatbots
+            .FirstOrDefaultAsync(c =>
+                c.Id == dto.ChatbotId &&
+                c.TenantId == dto.TenantId);
+
+        return CreatedAtAction(nameof(GetById), new { id = conv.Id }, new
+        {
+            conv.Id,
+            conv.Status,
+            conv.Channel,
+            conv.SessionId,
+            welcomeMessage = chatbot?.WelcomeMessage
+                ?? "Bonjour ! Comment puis-je vous aider ?",
+            chatbot = chatbot is null ? null : new
+            {
+                chatbot.Name,
+                chatbot.WelcomeMessage,
+                chatbot.WidgetTitle,
+                chatbot.WidgetColor,
+            }
+        });
     }
 
     [HttpPost("{id:guid}/messages")]
@@ -50,30 +81,24 @@ public class ConversationsController : ControllerBase
     {
         try
         {
-            // 1. Enregistrer le message utilisateur
-            var userMsg = await _convs.AddMessageAsync(
-                id, dto.TenantId, "user", dto.Content);
+            await _convs.AddMessageAsync(id, dto.TenantId, "user", dto.Content);
 
-            // 2. Récupérer la conversation pour avoir le chatbotId
             var conv = await _convs.GetByIdAsync(id, dto.TenantId);
             if (conv != null)
             {
-                // 3. Déclencher le moteur IA
                 var result = await _flowEngine.ProcessMessageAsync(
                     conv.ChatbotId, dto.TenantId, id, dto.Content);
 
-                // 4. Enregistrer la réponse du bot
                 var botMsg = await _convs.AddMessageAsync(
                     id, dto.TenantId, "bot",
                     result.BotResponse,
                     isAi: result.IsAiGenerated,
                     aiProvider: result.AiProvider);
 
-                // 5. Retourner la réponse du bot au widget
                 return Ok(botMsg);
             }
 
-            return Ok(userMsg);
+            return Ok(new { role = "bot", content = "Bonjour !" });
         }
         catch (KeyNotFoundException) { return NotFound(); }
     }
